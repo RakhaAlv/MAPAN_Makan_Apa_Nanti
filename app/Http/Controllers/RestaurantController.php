@@ -6,20 +6,27 @@ use App\Models\Category;
 use App\Models\Restaurant;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
-use Illuminate\Support\Facades\Storage;
 
 class RestaurantController extends Controller
 {
-    // ==========================================
-    // USER: Dashboard - lihat & cari restoran
-    // ==========================================
+    /**
+     * Dashboard utama — satu halaman untuk semua role.
+     * - Guest & User  : lihat + cari semua restoran
+     * - Merchant      : lihat semua restoran + panel info restoran miliknya
+     */
     public function index(Request $request)
     {
+        // Query semua restoran (untuk semua role)
         $query = Restaurant::with(['category', 'reviews']);
 
-        // Filter pencarian nama restoran
+        // Filter pencarian nama / deskripsi / alamat
         if ($request->filled('search')) {
-            $query->where('nama_restoran', 'like', '%' . $request->search . '%');
+            $search = $request->search;
+            $query->where(function ($q) use ($search) {
+                $q->where('nama_restoran', 'like', '%' . $search . '%')
+                  ->orWhere('deskripsi', 'like', '%' . $search . '%')
+                  ->orWhere('alamat', 'like', '%' . $search . '%');
+            });
         }
 
         // Filter berdasarkan kategori
@@ -27,155 +34,210 @@ class RestaurantController extends Controller
             $query->where('category_id', $request->category);
         }
 
-        // Semua restoran
-        $restaurants = $query->latest()->get();
-
-        // Rekomendasi: 5 restoran dengan rata-rata rating tertinggi
-        $rekomendasi = Restaurant::with(['category', 'reviews'])
+        // Ambil semua restoran dengan rata-rata rating
+        $restaurants = $query->withCount('reviews')
             ->withAvg('reviews', 'rating')
             ->orderByDesc('reviews_avg_rating')
-            ->take(5)
+            ->orderByDesc('reviews_count')
             ->get();
 
-        // Semua kategori untuk filter
+        $topRestaurants = Restaurant::with('category')
+            ->withCount('reviews')
+            ->withAvg('reviews', 'rating')
+            ->orderByDesc('reviews_avg_rating')
+            ->limit(4)
+            ->get();
+
+        // Ambil semua kategori untuk filter
         $categories = Category::all();
 
-        return view('user.dashboard', compact('restaurants', 'rekomendasi', 'categories'));
-    }
-
-    // USER: Halaman detail restoran
-    public function show(Restaurant $restaurant)
-    {
-        $restaurant->load(['category', 'reviews.user']);
-
-        // Cek apakah user sudah pernah review restoran ini
-        $sudahReview = $restaurant->reviews()
-            ->where('user_id', Auth::id())
-            ->exists();
-
-        return view('user.restaurant', compact('restaurant', 'sudahReview'));
-    }
-
-    // ==========================================
-    // MERCHANT: Dashboard
-    // ==========================================
-    public function merchantDashboard()
-    {
-        $restaurant = Auth::user()->restaurant;
-        return view('merchant.dashboard', compact('restaurant'));
-    }
-
-    // MERCHANT: Form tambah restoran
-    public function create()
-    {
-        // Jika merchant sudah punya restoran, langsung ke edit
-        if (Auth::user()->restaurant) {
-            return redirect()->route('merchant.edit')
-                ->with('info', 'Kamu sudah punya restoran. Silakan edit di sini.');
+        // Data khusus merchant: restoran milik merchant yang login
+        $myRestaurant = null;
+        if (Auth::check() && Auth::user()->role === 'merchant') {
+            $myRestaurant = Auth::user()->restaurant;
+            if ($myRestaurant) {
+                $myRestaurant->load(['category', 'reviews.user']);
+            }
         }
 
+        // Jika request AJAX (dari klik kategori), kembalikan potongan HTML saja
+        if ($request->ajax()) {
+            if ($request->get('view') === 'vertical') {
+                return view('partials.restaurant_list_vertical', compact('restaurants'));
+            }
+            return view('partials.restaurant_list', compact('restaurants'));
+        }
+
+        // Jika route adalah pencarian, tampilkan halaman pencarian (list vertikal)
+        if ($request->routeIs('user.search')) {
+            return view('user.dashboard', compact('restaurants', 'categories', 'myRestaurant'));
+        }
+
+        return view('welcome', compact('restaurants', 'categories', 'topRestaurants', 'myRestaurant'));
+    }
+
+    /**
+     * Detail restoran — publik, semua bisa lihat.
+     */
+    public function show(Restaurant $restaurant)
+    {
+        // Load data relasi yang dibutuhkan agar tidak terjadi N+1 query
+        $restaurant->load(['category', 'reviews.user', 'menus']);
+
+        // Cek apakah user yang login sudah pernah memberikan review untuk resto ini
+        $sudahReview = false;
+        if (Auth::check() && Auth::user()->role === 'user') {
+            $sudahReview = $restaurant->reviews()
+                ->where('user_id', Auth::id())
+                ->exists();
+        }
+
+        // Ambil data distribusi rating (bintang 1-5) untuk ditampilkan di statistik
+        $ratingDistribution = $restaurant->ratingDistribution();
+
+        // Jika yang melihat adalah merchant pemilik resto ini, tandai ulasan sudah 'dilihat'
+        // Kita menggunakan Session untuk mencatat waktu kunjungan terakhir karena dilarang memodifikasi struktur Database
+        if (Auth::check() && Auth::user()->role === 'merchant' && Auth::user()->id === $restaurant->id_merchant) {
+            session(['last_viewed_reviews_at_' . $restaurant->id_restoran => now()]);
+        }
+
+        return view('user.restaurant', compact('restaurant', 'sudahReview', 'ratingDistribution'));
+    }
+
+    /**
+     * Form tambah restoran (merchant yang belum punya restoran).
+     */
+    public function create()
+    {
+        if (Auth::user()->restaurant) {
+            return redirect()->route('user.dashboard')
+                ->with('info', 'Kamu sudah punya restoran. Edit lewat panel di dashboard.');
+        }
         $categories = Category::all();
         return view('merchant.create', compact('categories'));
     }
 
-    // MERCHANT: Simpan restoran baru
+    /**
+     * Simpan restoran baru.
+     */
     public function store(Request $request)
     {
         $request->validate([
-            'category_id'   => 'required|exists:categories,id',
             'nama_restoran' => 'required|max:150',
+            'category_id'   => 'required|exists:categories,id',
             'deskripsi'     => 'nullable|string',
             'alamat'        => 'required|string',
             'kontak'        => 'required|max:20',
-            'gmaps_link'    => 'nullable|url|max:2048',
-            'gambar'        => 'nullable|image|mimes:jpg,jpeg,png,webp|max:2048',
-        ], [
-            'category_id.required'   => 'Pilih kategori restoran.',
-            'nama_restoran.required' => 'Nama restoran wajib diisi.',
-            'alamat.required'        => 'Alamat wajib diisi.',
-            'kontak.required'        => 'Kontak wajib diisi.',
-            'gmaps_link.url'         => 'Link Google Maps tidak valid.',
-            'gambar.image'           => 'File harus berupa gambar.',
-            'gambar.max'             => 'Ukuran gambar maksimal 2MB.',
+            'gmaps_link'    => 'nullable|max:2048',
+            'gambar'        => 'nullable|image|mimes:jpg,jpeg,png|max:2048',
+            'hari_operasional' => 'required|array',
+            'jam_buka'         => 'required|string',
+            'jam_tutup'        => 'required|string',
+            'harga_min'        => 'required|numeric',
+            'harga_max'        => 'required|numeric',
         ]);
 
-        $gambarPath = null;
-        if ($request->hasFile('gambar')) {
-            $gambarPath = $request->file('gambar')->store('restaurants', 'public');
-        }
-
-        Restaurant::create([
-            'user_id'       => Auth::id(),
+        $data = [
+            'id_merchant'   => Auth::id(),
             'category_id'   => $request->category_id,
             'nama_restoran' => $request->nama_restoran,
             'deskripsi'     => $request->deskripsi,
             'alamat'        => $request->alamat,
             'kontak'        => $request->kontak,
             'gmaps_link'    => $request->gmaps_link,
-            'gambar'        => $gambarPath,
-        ]);
+            'hari_operasional' => implode(', ', $request->hari_operasional),
+            'jam_operasional'  => $request->jam_buka . ' - ' . $request->jam_tutup,
+            'range_harga'      => $request->harga_min . ' - ' . $request->harga_max,
+        ];
 
-        return redirect()->route('merchant.dashboard')
-            ->with('success', 'Restoran berhasil ditambahkan!');
+        if ($request->hasFile('gambar')) {
+            $path = $request->file('gambar')->store('restaurants', 'public');
+            $data['gambar'] = $path;
+        }
+
+        Restaurant::create($data);
+
+        // Update role flags di DB agar sinkron
+        Auth::user()->update([
+            'is_merchant' => true,
+            'role' => 'merchant' // fallback untuk kompatibilitas lama
+        ]);
+        
+        // Set session active role
+        session(['active_role' => 'merchant']);
+
+        return redirect()->route('merchant.manage')
+            ->with('success', 'Restoran berhasil didaftarkan! Selamat datang di panel Merchant.');
     }
 
-    // MERCHANT: Form edit restoran
+    /**
+     * Form edit restoran (merchant).
+     */
     public function edit()
     {
         $restaurant = Auth::user()->restaurant;
-
         if (!$restaurant) {
-            return redirect()->route('merchant.create')
-                ->with('info', 'Kamu belum punya restoran. Tambahkan dulu.');
+            return redirect()->route('merchant.create');
         }
-
         $categories = Category::all();
         return view('merchant.edit', compact('restaurant', 'categories'));
     }
 
-    // MERCHANT: Update restoran
+    /**
+     * Update data restoran.
+     */
     public function update(Request $request)
     {
         $restaurant = Auth::user()->restaurant;
 
         $request->validate([
-            'category_id'   => 'required|exists:categories,id',
             'nama_restoran' => 'required|max:150',
+            'category_id'   => 'required|exists:categories,id',
             'deskripsi'     => 'nullable|string',
             'alamat'        => 'required|string',
             'kontak'        => 'required|max:20',
-            'gmaps_link'    => 'nullable|url|max:2048',
-            'gambar'        => 'nullable|image|mimes:jpg,jpeg,png,webp|max:2048',
-        ], [
-            'category_id.required'   => 'Pilih kategori restoran.',
-            'nama_restoran.required' => 'Nama restoran wajib diisi.',
-            'alamat.required'        => 'Alamat wajib diisi.',
-            'kontak.required'        => 'Kontak wajib diisi.',
-            'gmaps_link.url'         => 'Link Google Maps tidak valid.',
-            'gambar.image'           => 'File harus berupa gambar.',
-            'gambar.max'             => 'Ukuran gambar maksimal 2MB.',
+            'gmaps_link'    => 'nullable|max:2048',
+            'gambar'        => 'nullable|image|mimes:jpg,jpeg,png|max:2048',
+            'hari_operasional' => 'required|array',
+            'jam_buka'         => 'required|string',
+            'jam_tutup'        => 'required|string',
+            'harga_min'        => 'required|numeric',
+            'harga_max'        => 'required|numeric',
         ]);
 
-        // Ganti gambar jika ada upload baru
-        if ($request->hasFile('gambar')) {
-            // Hapus gambar lama
-            if ($restaurant->gambar) {
-                Storage::disk('public')->delete($restaurant->gambar);
-            }
-            $restaurant->gambar = $request->file('gambar')->store('restaurants', 'public');
-        }
-
-        $restaurant->update([
+        $data = [
             'category_id'   => $request->category_id,
             'nama_restoran' => $request->nama_restoran,
             'deskripsi'     => $request->deskripsi,
             'alamat'        => $request->alamat,
             'kontak'        => $request->kontak,
             'gmaps_link'    => $request->gmaps_link,
-            'gambar'        => $restaurant->gambar,
-        ]);
+            'hari_operasional' => implode(', ', $request->hari_operasional),
+            'jam_operasional'  => $request->jam_buka . ' - ' . $request->jam_tutup,
+            'range_harga'      => $request->harga_min . ' - ' . $request->harga_max,
+        ];
 
-        return redirect()->route('merchant.dashboard')
-            ->with('success', 'Restoran berhasil diperbarui!');
+        if ($request->hasFile('gambar')) {
+            // Hapus gambar lama jika ada
+            if ($restaurant->gambar && \Illuminate\Support\Facades\Storage::disk('public')->exists($restaurant->gambar)) {
+                \Illuminate\Support\Facades\Storage::disk('public')->delete($restaurant->gambar);
+            }
+            $path = $request->file('gambar')->store('restaurants', 'public');
+            $data['gambar'] = $path;
+        }
+
+        $restaurant->update($data);
+
+        return redirect()->route('restaurant.show', $restaurant->id_restoran)
+            ->with('success', 'Data restoran berhasil diperbarui!');
+    }
+
+    /**
+     * Redirect lama merchant.dashboard ke dashboard utama.
+     * Biar link lama tidak 404.
+     */
+    public function merchantDashboard()
+    {
+        return redirect()->route('user.dashboard');
     }
 }

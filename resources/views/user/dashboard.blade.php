@@ -3,134 +3,68 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Dashboard - MAPAN</title>
+    <title>Pencarian Restoran - MAPAN</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700;800&family=Nunito:wght@400;500;600&display=swap" rel="stylesheet">
     <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body { font-family: 'Nunito', sans-serif; background: #FAF7F2; color: #1A1A1A; }
+        h1, h2, h3, h4, h5, h6 { font-family: 'Poppins', sans-serif; }
+        .navbar { position: sticky; top: 0; z-index: 50; background: white; border-bottom: 1px solid rgba(0,0,0,0.05); }
+        .search-bar-nav { border: 1.5px solid #E5E7EB; border-radius: 50px; transition: all .2s; }
+        .search-bar-nav:focus-within { border-color: #E8531A; box-shadow: 0 0 0 3px rgba(232,83,26,0.1); }
+        .category-chip {
+            background: white; border: 1.5px solid #E5E7EB; border-radius: 50px;
+            color: #1A1A1A; transition: all 0.2s; font-family: 'Poppins', sans-serif;
+            cursor: pointer; white-space: nowrap; padding: 10px 24px;
+            font-weight: 600;
+        }
+        .category-chip:hover, .category-chip.active {
+            background: #2D231E; border-color: #2D231E; color: white;
+        }
+        .no-scrollbar::-webkit-scrollbar { display: none; }
+        .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+    </style>
 </head>
-<body class="bg-gray-100 min-h-screen">
+<body>
 
-    {{-- Navbar --}}
-    <nav class="bg-white shadow-sm sticky top-0 z-10">
-        <div class="max-w-5xl mx-auto px-4 py-3 flex items-center justify-between">
-            <h1 class="text-xl font-bold text-orange-500">MAPAN</h1>
-            <div class="flex items-center gap-4">
-                <span class="text-sm text-gray-600">Halo, {{ Auth::user()->nama_pengguna }}!</span>
-                <form action="{{ route('logout') }}" method="POST">
-                    @csrf
-                    <button class="text-sm text-red-500 hover:underline">Logout</button>
-                </form>
-            </div>
-        </div>
-    </nav>
+@include('partials.navbar')
 
-    <div class="max-w-5xl mx-auto px-4 py-8">
-
-        {{-- Pencarian & Filter --}}
-        <form action="{{ route('user.dashboard') }}" method="GET" class="flex gap-3 mb-8 flex-wrap">
-            <input type="text" name="search" value="{{ request('search') }}"
-                placeholder="Cari restoran..."
-                class="flex-1 border border-gray-300 rounded-lg px-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-orange-400 min-w-[200px]">
-
-            <select name="category"
-                class="border border-gray-300 rounded-lg px-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-orange-400">
-                <option value="">Semua Kategori</option>
-                @foreach ($categories as $cat)
-                    <option value="{{ $cat->id }}" {{ request('category') == $cat->id ? 'selected' : '' }}>
-                        {{ $cat->nama_kategori }}
-                    </option>
-                @endforeach
-            </select>
-
-            <button type="submit"
-                class="bg-orange-500 hover:bg-orange-600 text-white px-5 py-2 rounded-lg text-sm font-medium transition">
-                Cari
-            </button>
-
-            @if (request('search') || request('category'))
-                <a href="{{ route('user.dashboard') }}"
-                    class="bg-gray-200 hover:bg-gray-300 text-gray-700 px-4 py-2 rounded-lg text-sm font-medium transition">
-                    Reset
-                </a>
-            @endif
-        </form>
-
-        {{-- Rekomendasi (hanya tampil jika tidak ada pencarian) --}}
-        @if (!request('search') && !request('category'))
-            <section class="mb-10">
-                <h2 class="text-lg font-bold text-gray-800 mb-4">⭐ Rekomendasi Restoran</h2>
-                @if ($rekomendasi->isEmpty())
-                    <p class="text-gray-400 text-sm">Belum ada restoran.</p>
-                @else
-                    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-                        @foreach ($rekomendasi as $resto)
-                            <a href="{{ route('restaurant.show', $resto->id) }}"
-                                class="bg-white rounded-xl shadow hover:shadow-md transition overflow-hidden">
-                                @if ($resto->gambar)
-                                    <img src="{{ Storage::url($resto->gambar) }}"
-                                        alt="{{ $resto->nama_restoran }}"
-                                        class="w-full h-40 object-cover">
-                                @else
-                                    <div class="w-full h-40 bg-orange-100 flex items-center justify-center text-4xl">🍽️</div>
-                                @endif
-                                <div class="p-4">
-                                    <h3 class="font-semibold text-gray-800">{{ $resto->nama_restoran }}</h3>
-                                    <p class="text-xs text-gray-400 mt-1">{{ $resto->category->nama_kategori }}</p>
-                                    <div class="flex items-center gap-1 mt-2">
-                                        <span class="text-yellow-400 text-sm">★</span>
-                                        <span class="text-sm font-medium text-gray-700">
-                                            {{ number_format($resto->reviews_avg_rating ?? 0, 1) }}
-                                        </span>
-                                        <span class="text-xs text-gray-400">({{ $resto->reviews->count() }} review)</span>
-                                    </div>
-                                </div>
-                            </a>
-                        @endforeach
-                    </div>
-                @endif
-            </section>
-        @endif
-
-        {{-- Semua Restoran --}}
-        <section>
-            <h2 class="text-lg font-bold text-gray-800 mb-4">
-                {{ request('search') || request('category') ? 'Hasil Pencarian' : '🍴 Semua Restoran' }}
-            </h2>
-
-            @if ($restaurants->isEmpty())
-                <div class="text-center py-16 text-gray-400">
-                    <div class="text-5xl mb-3">🔍</div>
-                    <p>Restoran tidak ditemukan.</p>
-                </div>
+<main class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-10">
+    {{-- Header Content --}}
+    <div class="mb-6">
+        <h1 class="text-2xl font-bold text-gray-800">
+            @if(request('category'))
+                {{ $categories->find(request('category'))->nama_kategori ?? 'Semua Restoran' }}
             @else
-                <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-                    @foreach ($restaurants as $resto)
-                        <a href="{{ route('restaurant.show', $resto->id) }}"
-                            class="bg-white rounded-xl shadow hover:shadow-md transition overflow-hidden">
-                            @if ($resto->gambar)
-                                <img src="{{ Storage::url($resto->gambar) }}"
-                                    alt="{{ $resto->nama_restoran }}"
-                                    class="w-full h-40 object-cover">
-                            @else
-                                <div class="w-full h-40 bg-orange-100 flex items-center justify-center text-4xl">🍽️</div>
-                            @endif
-                            <div class="p-4">
-                                <h3 class="font-semibold text-gray-800">{{ $resto->nama_restoran }}</h3>
-                                <p class="text-xs text-orange-400 mt-1">{{ $resto->category->nama_kategori }}</p>
-                                <p class="text-xs text-gray-500 mt-1 line-clamp-2">{{ $resto->alamat }}</p>
-                                <div class="flex items-center gap-1 mt-2">
-                                    <span class="text-yellow-400 text-sm">★</span>
-                                    <span class="text-sm font-medium text-gray-700">
-                                        {{ number_format($resto->averageRating(), 1) }}
-                                    </span>
-                                    <span class="text-xs text-gray-400">({{ $resto->reviews->count() }} review)</span>
-                                </div>
-                            </div>
-                        </a>
-                    @endforeach
-                </div>
+                Semua Restoran
             @endif
-        </section>
+        </h1>
+        <p class="text-sm text-gray-400 mt-1">Menampilkan semua restoran di Kota Semarang</p>
+    </div>
+
+    {{-- Category Chips --}}
+    <div class="flex gap-3 overflow-x-auto pb-6 no-scrollbar">
+        <button onclick="window.location.href='{{ route('user.search') }}'" 
+                class="category-chip px-6 py-2 text-xs {{ !request('category') ? 'active' : '' }}">
+            Semua
+        </button>
+        @foreach($categories as $cat)
+            <button onclick="window.location.href='{{ route('user.search', ['category' => $cat->id]) }}'"
+                    class="category-chip px-6 py-2 text-xs {{ request('category') == $cat->id ? 'active' : '' }}">
+                {{ $cat->nama_kategori }}
+            </button>
+        @endforeach
 
     </div>
+
+    {{-- Vertical Results List --}}
+    <div id="search-results" class="max-w-4xl">
+        @include('partials.restaurant_list_vertical', ['restaurants' => $restaurants])
+    </div>
+</main>
+
+@include('partials.footer')
 
 </body>
 </html>

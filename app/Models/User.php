@@ -17,11 +17,21 @@ class User extends Authenticatable
         'role',
     ];
 
+    /**
+     * The attributes that should be hidden for serialization.
+     *
+     * @var array<int, string>
+     */
     protected $hidden = [
         'password',
         'remember_token',
     ];
 
+    /**
+     * Get the attributes that should be cast.
+     *
+     * @return array<string, string>
+     */
     protected function casts(): array
     {
         return [
@@ -30,22 +40,20 @@ class User extends Authenticatable
         ];
     }
 
-    // Relasi: user (merchant) punya satu restoran
     public function restaurant()
     {
-        return $this->hasOne(Restaurant::class);
+        return $this->hasOne(Restaurant::class, 'id_merchant');
     }
 
-    // Relasi: user bisa punya banyak review
     public function reviews()
     {
         return $this->hasMany(Review::class);
     }
 
-    // Helper: cek apakah user adalah merchant
-    public function isMerchant(): bool
+    // Helper: cek apakah user punya restoran (bisa jadi merchant)
+    public function hasRestaurant(): bool
     {
-        return $this->role === 'merchant';
+        return $this->restaurant()->exists();
     }
 
     // Helper: cek apakah user adalah user biasa
